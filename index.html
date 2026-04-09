@@ -396,6 +396,29 @@ nav{
       <div class="list" id="device-list"></div>
     </div>
 
+    <!-- MESSAGES -->
+    <div class="screen" id="screen-messages">
+      <div class="sh"><span class="sh-title">Messages</span></div>
+      <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <input id="msg-input" type="text" placeholder="Type a message..." maxlength="50"
+          style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+                 padding:9px 12px;font-size:14px;color:var(--text);outline:none;
+                 caret-color:var(--amber);font-family:var(--font-ui)"
+          onkeydown="if(event.key==='Enter')App.sendMessage()">
+        <button onclick="App.sendMessage()" style="background:var(--amber);border:none;border-radius:8px;
+          padding:9px 16px;color:#000;font-weight:600;cursor:pointer;font-size:14px;white-space:nowrap">
+          Send
+        </button>
+      </div>
+      <div class="list" id="msg-list">
+        <div class="empty">
+          <svg viewBox="0 0 24 24" style="width:40px;height:40px;stroke:currentColor;fill:none;stroke-width:1.2;stroke-linecap:round;opacity:.4"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          <p>No messages yet</p>
+          <small>Messages from Lodestone devices appear here</small>
+        </div>
+      </div>
+    </div>
+
     <!-- CONNECT -->
     <div class="screen" id="screen-connect">
       <div class="sh"><span class="sh-title">Connection</span></div>
@@ -484,6 +507,10 @@ nav{
       <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
       <span>Devices</span>
     </button>
+    <button class="tab" onclick="App.setTab('messages',this);App.renderMessages()">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span>Messages</span>
+    </button>
     <button class="tab" onclick="App.setTab('connect',this)">
       <svg viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0114.08 0"/><path d="M1.42 9a16 16 0 0121.16 0"/><path d="M8.53 16.11a6 6 0 016.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg>
       <span>Connect</span>
@@ -508,17 +535,6 @@ nav{
 <div class="toast" id="toast"></div>
 
 <script src="js/app.js"></script>
-<script>
-// Global wrappers for inline onclick handlers
-function confirmUsername() {
-  const val = (document.getElementById('username-input').value || '').trim();
-  if (!val) { App && typeof toast === 'function' ? toast('Please enter a name') : alert('Please enter a name'); return; }
-  localStorage.setItem('lode_username', val.slice(0,15));
-  if (typeof state !== 'undefined') state.deviceName = val.slice(0,15);
-  document.getElementById('cfg-name').value = val.slice(0,15);
-  const overlay = document.getElementById('username-overlay');
-  if (overlay) overlay.remove();
-}
-</script>
+
 </body>
 </html>

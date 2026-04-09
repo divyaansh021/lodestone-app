@@ -174,6 +174,7 @@ const App = (() => {
       // Subscribe to announce and pair request topics
       state.mqttClient.subscribe('lodestone/announce');
       state.mqttClient.subscribe('lodestone/devices/#');
+      state.mqttClient.subscribe('lodestone/msg/broadcast');
       // Subscribe to incoming pair requests (colons stripped to match firmware)
       const myCleanMac = state.myMac.replace(/:/g, '');
       state.mqttClient.subscribe(`lodestone/request/${myCleanMac}`);
@@ -226,6 +227,18 @@ const App = (() => {
   }
 
   function handleMessage(topic, data) {
+    // Incoming message from Lodestone device or other user
+    if (topic === 'lodestone/msg/broadcast') {
+      const from = data.from || 'Unknown';
+      const msg  = data.msg  || '';
+      if (!state.messages) state.messages = [];
+      state.messages.unshift({ from, msg, time: Date.now() });
+      if (state.messages.length > 50) state.messages.pop();
+      showMessageNotification(from, msg);
+      if (state.tab === 'messages') renderMessages();
+      return;
+    }
+
     // Position update from Lodestone hardware firmware
     if (topic.startsWith('lodestone/devices/')) {
       const mac = data.mac || topic.split('/')[2];
@@ -319,6 +332,18 @@ const App = (() => {
         })
       );
     });
+  }
+
+  function unpairDevice(mac) {
+    const cleanMac = mac.replace(/:/g,'');
+    state.pairedDevices = state.pairedDevices.filter(m => m !== mac && m !== cleanMac);
+    savePaired();
+    // Unsubscribe from pair topic
+    if (state.mqttClient) {
+      state.mqttClient.unsubscribe(`lodestone/pair/${pairTopic(state.myMac, cleanMac)}`);
+    }
+    toast('Unpaired');
+    renderDevices();
   }
 
   function sendPairRequest(mac) {
@@ -464,7 +489,8 @@ const App = (() => {
     }
 
     const deviceRow = ([mac, d]) => {
-      const paired = state.pairedDevices.includes(mac);
+      const cleanMacKey = mac.replace(/:/g,"");
+      const paired = state.pairedDevices.includes(mac) || state.pairedDevices.includes(cleanMacKey);
       const age = Math.round((Date.now() - d.lastSeen) / 1000);
       const distStr = (d.lat != null && state.myLat != null)
         ? formatDist(haversine(state.myLat, state.myLon, d.lat, d.lon))
@@ -473,13 +499,16 @@ const App = (() => {
         ? `<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>`
         : `<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>`;
       return `
-        <div class="list-item" onclick="App.sendPairRequest('${mac}')">
-          <div class="list-icon ${paired ? 'green' : d.isHardware ? 'amber' : 'blue'}">${icon}</div>
-          <div class="item-info">
+        <div class="list-item">
+          <div class="list-icon ${paired ? 'green' : d.isHardware ? 'amber' : 'blue'}" onclick="App.sendPairRequest('${mac}')">${icon}</div>
+          <div class="item-info" onclick="App.sendPairRequest('${mac}')">
             <div class="item-name">${d.name}</div>
             <div class="item-sub">${distStr} · ${age}s ago</div>
           </div>
-          <span class="item-badge ${paired ? 'badge-live' : 'badge-off'}">${paired ? 'PAIRED' : 'TAP TO PAIR'}</span>
+          ${paired
+            ? `<button onclick="App.unpairDevice('${mac}')" style="background:none;border:1px solid var(--red);border-radius:6px;color:var(--red);padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">Unpair</button>`
+            : `<span class="item-badge badge-off" onclick="App.sendPairRequest('${mac}')">TAP TO PAIR</span>`
+          }
         </div>`;
     };
 
@@ -634,6 +663,64 @@ const App = (() => {
   document.addEventListener('DOMContentLoaded', init);
 
 
+  // ── Messages ─────────────────────────────────────────────────────────────────
+  function showMessageNotification(from, msg) {
+    const n = document.createElement('div');
+    n.style.cssText = `
+      position:fixed;top:60px;left:50%;transform:translateX(-50%);
+      background:var(--bg2);border:1px solid var(--amber);border-radius:10px;
+      padding:10px 16px;z-index:800;max-width:300px;width:90%;
+      display:flex;flex-direction:column;gap:4px;cursor:pointer;
+    `;
+    n.innerHTML = `
+      <div style="font-size:11px;color:var(--amber);font-weight:600">${from}</div>
+      <div style="font-size:13px;color:var(--text)">${msg}</div>
+    `;
+    n.onclick = () => { n.remove(); setTab('messages', document.querySelector('.tab:nth-child(5)')); };
+    document.body.appendChild(n);
+    setTimeout(() => n.remove(), 4000);
+  }
+
+  function renderMessages() {
+    const el = document.getElementById('msg-list');
+    if (!el) return;
+    if (!state.messages || !state.messages.length) {
+      el.innerHTML = `<div class="empty">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <p>No messages yet</p><small>Messages from Lodestone devices appear here</small>
+      </div>`;
+      return;
+    }
+    el.innerHTML = state.messages.map(m => {
+      const t = new Date(m.time);
+      const timeStr = t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+      return `<div class="list-item" style="flex-direction:column;align-items:flex-start;gap:4px">
+        <div style="display:flex;width:100%;justify-content:space-between">
+          <span style="font-size:12px;font-weight:600;color:var(--amber)">${m.from}</span>
+          <span style="font-size:11px;color:var(--text3)">${timeStr}</span>
+        </div>
+        <div style="font-size:14px;color:var(--text)">${m.msg}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function sendMessage() {
+    const input = document.getElementById('msg-input');
+    const msg = (input.value || '').trim();
+    if (!msg) return;
+    if (!state.mqttConnected) { toast('Connect to broker first'); return; }
+    state.mqttClient.publish('lodestone/msg/broadcast', JSON.stringify({
+      from: state.deviceName,
+      mac: state.myMac,
+      msg,
+    }));
+    if (!state.messages) state.messages = [];
+    state.messages.unshift({ from: 'Me', msg, time: Date.now() });
+    input.value = '';
+    renderMessages();
+    toast('Message sent');
+  }
+
   // ── Map search (Nominatim — free, no API key) ────────────────────────────
   let searchMarker = null;
   async function searchMap() {
@@ -687,7 +774,9 @@ const App = (() => {
     showAddForm, hideAddForm, saveLocation, deleteLocation,
     addPinnedLocation, dismissPin,
     acceptPair, declinePair,
-    sendPairRequest, searchMap, selectSearchResult,
+    sendPairRequest, unpairDevice,
+    searchMap, selectSearchResult,
+    renderMessages, sendMessage,
   };
 
 })();
