@@ -179,10 +179,15 @@ const App = (() => {
       const myCleanMac = state.myMac.replace(/:/g, '');
       state.mqttClient.subscribe(`lodestone/request/${myCleanMac}`);
       state.mqttClient.subscribe(`lodestone/accept/${myCleanMac}`);
-      // Subscribe to paired device topics
+      // Re-subscribe to all saved paired topics
+      const myClean = state.myMac.replace(/:/g,'');
       state.pairedDevices.forEach(mac => {
-        state.mqttClient.subscribe(`lodestone/pair/${pairTopic(state.myMac, mac)}`);
+        const cleanMac = mac.replace(/:/g,'');
+        // Try both orderings since firmware sorts differently
+        state.mqttClient.subscribe(`lodestone/pair/${myClean}_${cleanMac}`);
+        state.mqttClient.subscribe(`lodestone/pair/${cleanMac}_${myClean}`);
       });
+      state.mqttClient.subscribe('lodestone/msg/broadcast');
       announcePresence();
       toast('Connected to broker');
     });
@@ -293,18 +298,23 @@ const App = (() => {
       renderDevices();
     }
 
-    // Position update from paired device
+    // Position update from paired device (check both topic orderings)
+    const myCleanMac2 = state.myMac.replace(/:/g,'');
     state.pairedDevices.forEach(mac => {
-      if (topic === `lodestone/pair/${pairTopic(state.myMac, mac)}`) {
-        if (data.mac === state.myMac) return;
+      const cleanMac = mac.replace(/:/g,'');
+      const t1 = `lodestone/pair/${myCleanMac2}_${cleanMac}`;
+      const t2 = `lodestone/pair/${cleanMac}_${myCleanMac2}`;
+      if (topic === t1 || topic === t2) {
+        if (data.mac === state.myMac || data.mac === myCleanMac2) return;
         state.devices[mac] = {
           ...(state.devices[mac] || {}),
           name: data.name || state.devices[mac]?.name || 'Lodestone',
           lat: data.lat, lon: data.lon, heading: data.heading,
-          lastSeen: Date.now(),
+          lastSeen: Date.now(), isHardware: true,
         };
         updateDeviceMarker(mac);
         renderDevices();
+        savePairedPositions();
       }
     });
   }
@@ -553,13 +563,32 @@ const App = (() => {
       if (Array.isArray(d)) state.locations = d.slice(0,10);
     } catch(e) {}
   }
+  function pairedKey() {
+    // Per-username key so each device/user has their own pairings
+    const user = localStorage.getItem('lode_username') || 'default';
+    return 'lode_paired_' + user.toLowerCase().replace(/[^a-z0-9]/g,'_');
+  }
   function savePaired() {
-    try { localStorage.setItem('lode_paired', JSON.stringify(state.pairedDevices)); } catch(e) {}
+    try { localStorage.setItem(pairedKey(), JSON.stringify(state.pairedDevices)); } catch(e) {}
   }
   function loadPaired() {
     try {
-      const d = JSON.parse(localStorage.getItem('lode_paired') || '[]');
+      const d = JSON.parse(localStorage.getItem(pairedKey()) || '[]');
       if (Array.isArray(d)) state.pairedDevices = d;
+      // Also load last known positions
+      const pos = JSON.parse(localStorage.getItem(pairedKey()+'_pos') || '{}');
+      Object.entries(pos).forEach(([mac,d]) => {
+        if (!state.devices[mac]) state.devices[mac] = { ...d, isHardware:true, lastSeen:0 };
+      });
+    } catch(e) {}
+  }
+  function savePairedPositions() {
+    try {
+      const pos = {};
+      state.pairedDevices.forEach(mac => {
+        if (state.devices[mac]?.lat) pos[mac] = { name:state.devices[mac].name, lat:state.devices[mac].lat, lon:state.devices[mac].lon };
+      });
+      localStorage.setItem(pairedKey()+'_pos', JSON.stringify(pos));
     } catch(e) {}
   }
   function loadConfig() {
@@ -637,7 +666,12 @@ const App = (() => {
   // Config auto-save
     document.getElementById('cfg-name').addEventListener('change', e => {
     const v = e.target.value.trim();
-    if (v) { state.deviceName = v; localStorage.setItem('lode_username', v); }
+    if (v) {
+      state.deviceName = v;
+      localStorage.setItem('lode_username', v);
+      loadPaired();  // reload pairings for this username
+      renderDevices();
+    }
   });
   ['cfg-host','cfg-port','cfg-name'].forEach(id => {
       document.getElementById(id).addEventListener('change', () => {

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lodestone">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Lodestone</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- MQTT.js -->
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+
+<style>
+/* ── Reset & base ─────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg0:#0d1117;
+  --bg1:#161b22;
+  --bg2:#21262d;
+  --bg3:#30363d;
+  --amber:#f0a500;
+  --amber-dim:#7a5200;
+  --green:#3fb950;
+  --red:#f85149;
+  --blue:#58a6ff;
+  --text:#e6edf3;
+  --text2:#8b949e;
+  --text3:#484f58;
+  --border:#30363d;
+  --font-ui:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-mono:'SF Mono','Fira Code','Consolas',monospace;
+  --tab-h:56px;
+  --header-h:52px;
+  --safe-bottom:env(safe-area-inset-bottom,0px);
+}
+html,body{height:100%;overflow:hidden;background:var(--bg0);color:var(--text);font-family:var(--font-ui);font-size:15px}
+
+/* ── Layout ───────────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100%;height:100dvh}
+header{
+  height:var(--header-h);flex-shrink:0;
+  background:var(--bg1);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 16px;gap:12px;
+  position:relative;z-index:100;
+}
+header .logo{
+  font-size:18px;font-weight:700;letter-spacing:.05em;color:var(--amber);
+  font-family:var(--font-mono);
+}
+header .status-dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:background .3s}
+header .status-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
+header .status-label{font-size:12px;color:var(--text2);font-family:var(--font-mono)}
+header .spacer{flex:1}
+header .gps-badge{
+  font-size:11px;font-family:var(--font-mono);color:var(--text3);
+  border:1px solid var(--border);border-radius:4px;padding:2px 6px;
+}
+header .gps-badge.fix{color:var(--green);border-color:var(--green)}
+
+#screens{flex:1;overflow:hidden;position:relative}
+.screen{
+  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;
+  display:none;flex-direction:column;
+}
+.screen.active{display:flex}
+
+/* ── Tab bar ──────────────────────────────────────────────── */
+nav{
+  height:calc(var(--tab-h) + var(--safe-bottom));
+  padding-bottom:var(--safe-bottom);
+  background:var(--bg1);border-top:1px solid var(--border);
+  display:flex;flex-shrink:0;z-index:100;
+}
+.tab{
+  flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;cursor:pointer;
+  color:var(--text3);transition:color .15s;border:none;background:none;
+  padding:0;
+}
+.tab.active{color:var(--amber)}
+.tab svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tab span{font-size:10px;font-weight:500;letter-spacing:.03em}
+
+/* ── Screen header ────────────────────────────────────────── */
+.sh{
+  padding:14px 16px 10px;border-bottom:1px solid var(--border);
+  font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text2);background:var(--bg1);flex-shrink:0;
+  display:flex;align-items:center;gap:8px;
+}
+.sh .sh-title{flex:1}
+.sh .sh-action{
+  font-size:12px;letter-spacing:0;text-transform:none;font-weight:500;
+  color:var(--amber);cursor:pointer;padding:4px 10px;
+  border:1px solid var(--amber-dim);border-radius:6px;
+  background:none;white-space:nowrap;
+}
+.sh .sh-action:active{opacity:.7}
+
+/* ── Map screen ───────────────────────────────────────────── */
+#map{flex:1;position:relative;min-height:0}
+#leaflet-map{width:100%;height:100%}
+.map-pin-popup{
+  position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  background:var(--bg1);border:1px solid var(--amber);border-radius:10px;
+  padding:12px 14px;z-index:500;min-width:220px;
+  display:none;flex-direction:column;gap:8px;
+}
+.map-pin-popup.visible{display:flex}
+.map-pin-popup .coord{font-family:var(--font-mono);font-size:11px;color:var(--text2)}
+.map-pin-popup .pp-title{font-size:13px;font-weight:600;color:var(--text)}
+.map-pin-popup .pp-btns{display:flex;gap:8px}
+.pp-btn{
+  flex:1;padding:8px;border-radius:7px;border:none;cursor:pointer;
+  font-size:13px;font-weight:500;font-family:var(--font-ui);
+}
+.pp-btn.primary{background:var(--amber);color:#000}
+.pp-btn.secondary{background:var(--bg3);color:var(--text)}
+.pp-btn:active{opacity:.8}
+
+/* ── List items ───────────────────────────────────────────── */
+.list{padding:8px 0;flex:1}
+.list-item{
+  display:flex;align-items:center;gap:12px;
+  padding:12px 16px;border-bottom:1px solid var(--border);
+  cursor:pointer;transition:background .1s;
+}
+.list-item:active{background:var(--bg2)}
+.list-icon{
+  width:36px;height:36px;border-radius:9px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.list-icon svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.list-icon.amber{background:#7a520022;color:var(--amber)}
+.list-icon.green{background:#3fb95022;color:var(--green)}
+.list-icon.blue{background:#58a6ff22;color:var(--blue)}
+.list-icon.red{background:#f8514922;color:var(--red)}
+.item-info{flex:1;min-width:0}
+.item-name{font-size:14px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-sub{font-size:11px;color:var(--text2);font-family:var(--font-mono);margin-top:1px}
+.item-badge{
+  font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600;
+  white-space:nowrap;flex-shrink:0;font-family:var(--font-mono);
+}
+.badge-live{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
+.badge-saved{background:#f0a50022;color:var(--amber);border:1px solid #f0a50044}
+.badge-off{background:var(--bg3);color:var(--text3)}
+.item-chevron{color:var(--text3);flex-shrink:0}
+.item-chevron svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+
+/* ── Empty state ──────────────────────────────────────────── */
+.empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;padding:48px 24px;color:var(--text3);text-align:center;flex:1;
+}
+.empty svg{width:40px;height:40px;stroke:currentColor;fill:none;stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round;opacity:.4}
+.empty p{font-size:14px;line-height:1.5}
+.empty small{font-size:12px;color:var(--text3)}
+
+/* ── Add location form ────────────────────────────────────── */
+.form-card{
+  margin:12px 16px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;
+}
+.form-field{
+  display:flex;flex-direction:column;gap:4px;padding:12px 14px;
+  border-bottom:1px solid var(--border);
+}
+.form-field:last-of-type{border-bottom:none}
+.form-field label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text2)}
+.form-field input{
+  background:none;border:none;outline:none;font-size:14px;
+  color:var(--text);font-family:var(--font-mono);padding:2px 0;
+  caret-color:var(--amber);
+}
+.form-field input::placeholder{color:var(--text3)}
+.form-actions{display:flex;gap:8px;padding:12px 16px}
+.btn{
+  flex:1;padding:11px;border-radius:9px;border:none;cursor:pointer;
+  font-size:14px;font-weight:600;font-family:var(--font-ui);transition:opacity .15s;
+}
+.btn:active{opacity:.8}
+.btn-primary{background:var(--amber);color:#000}
+.btn-secondary{background:var(--bg3);color:var(--text)}
+
+/* ── Section label ────────────────────────────────────────── */
+.section-label{
+  padding:16px 16px 6px;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--text3);font-weight:600;
+}
+
+/* ── Connect screen ───────────────────────────────────────── */
+.conn-card{
+  margin:8px 16px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;
+}
+.conn-row{
+  display:flex;align-items:center;gap:12px;padding:14px 16px;
+  border-bottom:1px solid var(--border);
+}
+.conn-row:last-child{border-bottom:none}
+.conn-row-info{flex:1}
+.conn-row-label{font-size:14px;font-weight:500;color:var(--text)}
+.conn-row-sub{font-size:11px;color:var(--text2);font-family:var(--font-mono);margin-top:2px}
+.toggle-wrap{flex-shrink:0}
+.toggle{
+  width:44px;height:26px;background:var(--bg3);border-radius:13px;
+  position:relative;cursor:pointer;transition:background .2s;border:none;
+  -webkit-appearance:none;
+}
+.toggle.on{background:var(--amber)}
+.toggle::after{
+  content:'';position:absolute;width:20px;height:20px;background:#fff;
+  border-radius:50%;top:3px;left:3px;transition:transform .2s;
+}
+.toggle.on::after{transform:translateX(18px)}
+.conn-input{
+  width:100%;background:none;border:none;outline:none;
+  font-size:13px;color:var(--text);font-family:var(--font-mono);
+  padding:4px 0;caret-color:var(--amber);
+}
+.conn-input::placeholder{color:var(--text3)}
+
+/* ── Broker status bar ────────────────────────────────────── */
+.broker-bar{
+  margin:12px 16px 0;padding:10px 14px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:10px;
+  display:flex;align-items:center;gap:10px;
+}
+.broker-dot{width:8px;height:8px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:background .3s}
+.broker-dot.connected{background:var(--green);box-shadow:0 0 6px var(--green)}
+.broker-dot.connecting{background:var(--amber);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.broker-info{flex:1}
+.broker-label{font-size:12px;font-weight:500;color:var(--text)}
+.broker-sub{font-size:10px;color:var(--text2);font-family:var(--font-mono)}
+.broker-btn{
+  font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);
+  background:none;color:var(--text2);cursor:pointer;font-family:var(--font-ui);
+}
+.broker-btn:active{background:var(--bg3)}
+
+/* ── Device request modal ─────────────────────────────────── */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;
+  display:none;align-items:flex-end;
+}
+.modal-overlay.visible{display:flex}
+.modal{
+  width:100%;background:var(--bg1);border-radius:20px 20px 0 0;
+  border-top:1px solid var(--border);padding:20px 20px calc(20px + var(--safe-bottom));
+}
+.modal-title{font-size:17px;font-weight:700;margin-bottom:6px}
+.modal-sub{font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.5}
+.modal-btns{display:flex;gap:10px}
+.modal-btn{
+  flex:1;padding:13px;border-radius:11px;border:none;cursor:pointer;
+  font-size:15px;font-weight:600;font-family:var(--font-ui);
+}
+.modal-btn.accept{background:var(--green);color:#000}
+.modal-btn.decline{background:var(--bg3);color:var(--text)}
+.modal-btn:active{opacity:.8}
+
+/* ── Toast ────────────────────────────────────────────────── */
+.toast{
+  position:fixed;bottom:calc(var(--tab-h) + var(--safe-bottom) + 12px);
+  left:50%;transform:translateX(-50%) translateY(20px);
+  background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+  padding:10px 18px;font-size:13px;color:var(--text);z-index:900;
+  opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;
+  white-space:nowrap;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── Leaflet custom markers ───────────────────────────────── */
+.marker-me,.marker-device,.marker-saved{
+  width:14px;height:14px;border-radius:50%;border:2px solid #fff;
+}
+.marker-me{background:var(--blue)}
+.marker-device{background:var(--green)}
+.marker-saved{background:var(--amber)}
+.leaflet-container{background:#0d1117}
+.map-search{
+  position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  z-index:500;width:calc(100% - 24px);max-width:340px;
+  display:flex;gap:0;
+}
+.map-search input{
+  flex:1;background:var(--bg1);border:1px solid var(--border);
+  border-right:none;border-radius:10px 0 0 10px;
+  padding:10px 14px;font-size:14px;color:var(--text);
+  outline:none;font-family:var(--font-ui);
+  caret-color:var(--amber);
+}
+.map-search input::placeholder{color:var(--text3)}
+.map-search input:focus{border-color:var(--amber)}
+.map-search button{
+  background:var(--amber);border:none;border-radius:0 10px 10px 0;
+  padding:10px 14px;cursor:pointer;color:#000;font-size:14px;
+  display:flex;align-items:center;justify-content:center;
+}
+.map-search button:active{opacity:.8}
+.map-search-results{
+  position:absolute;top:52px;left:50%;transform:translateX(-50%);
+  z-index:501;width:calc(100% - 24px);max-width:340px;
+  background:var(--bg1);border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;display:none;
+}
+.map-search-result{
+  padding:10px 14px;font-size:13px;color:var(--text);cursor:pointer;
+  border-bottom:1px solid var(--border);
+}
+.map-search-result:last-child{border-bottom:none}
+.map-search-result:active{background:var(--bg2)}
+.map-search-result small{display:block;font-size:11px;color:var(--text2);margin-top:2px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header>
+    <span class="logo">LODESTONE</span>
+    <div class="status-dot" id="mqtt-dot"></div>
+    <span class="status-label" id="mqtt-label">Disconnected</span>
+    <div class="spacer"></div>
+    <span class="gps-badge" id="gps-badge">NO GPS</span>
+  </header>
+
+  <!-- Screens -->
+  <div id="screens">
+
+    <!-- MAP -->
+    <div class="screen active" id="screen-map">
+      <div id="map">
+        <div id="leaflet-map"></div>
+        <div class="map-search">
+          <input id="map-search-input" type="text" placeholder="Search location..." autocomplete="off"
+            onkeydown="if(event.key==='Enter')App.searchMap()">
+          <button onclick="App.searchMap()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+        </div>
+        <div class="map-search-results" id="map-search-results"></div>
+        <div class="map-pin-popup" id="pin-popup">
+          <div class="pp-title">Pin this location?</div>
+          <div class="coord" id="pin-coord">—</div>
+          <div class="pp-btns">
+            <button class="pp-btn primary" onclick="App.addPinnedLocation()">Add to Lodestone</button>
+            <button class="pp-btn secondary" onclick="App.dismissPin()">Dismiss</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOCATIONS -->
+    <div class="screen" id="screen-locations">
+      <div class="sh">
+        <span class="sh-title">Saved Locations</span>
+        <button class="sh-action" onclick="App.showAddForm()">+ Add</button>
+      </div>
+      <div id="add-form" style="display:none">
+        <div class="form-card">
+          <div class="form-field">
+            <label>Name</label>
+            <input id="loc-name" type="text" placeholder="Home, Office..." maxlength="15" autocomplete="off">
+          </div>
+          <div class="form-field">
+            <label>Latitude</label>
+            <input id="loc-lat" type="number" placeholder="13.0827" step="any" inputmode="decimal">
+          </div>
+          <div class="form-field">
+            <label>Longitude</label>
+            <input id="loc-lon" type="number" placeholder="80.2707" step="any" inputmode="decimal">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" onclick="App.hideAddForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="App.saveLocation()">Save to Lodestone</button>
+        </div>
+      </div>
+      <div class="list" id="loc-list"></div>
+    </div>
+
+    <!-- DEVICES -->
+    <div class="screen" id="screen-devices">
+      <div class="sh"><span class="sh-title">Nearby Devices</span></div>
+      <div class="list" id="device-list"></div>
+    </div>
+
+    <!-- MESSAGES -->
+    <div class="screen" id="screen-messages">
+      <div class="sh"><span class="sh-title">Messages</span></div>
+      <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <input id="msg-input" type="text" placeholder="Type a message..." maxlength="50"
+          style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+                 padding:9px 12px;font-size:14px;color:var(--text);outline:none;
+                 caret-color:var(--amber);font-family:var(--font-ui)"
+          onkeydown="if(event.key==='Enter')App.sendMessage()">
+        <button onclick="App.sendMessage()" style="background:var(--amber);border:none;border-radius:8px;
+          padding:9px 16px;color:#000;font-weight:600;cursor:pointer;font-size:14px;white-space:nowrap">
+          Send
+        </button>
+      </div>
+      <div class="list" id="msg-list">
+        <div class="empty">
+          <svg viewBox="0 0 24 24" style="width:40px;height:40px;stroke:currentColor;fill:none;stroke-width:1.2;stroke-linecap:round;opacity:.4"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          <p>No messages yet</p>
+          <small>Messages from Lodestone devices appear here</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECT -->
+    <div class="screen" id="screen-connect">
+      <div class="sh"><span class="sh-title">Connection</span></div>
+
+      <div class="broker-bar">
+        <div class="broker-dot" id="broker-dot"></div>
+        <div class="broker-info">
+          <div class="broker-label" id="broker-label">MQTT Broker</div>
+          <div class="broker-sub" id="broker-sub">Not connected</div>
+        </div>
+        <button class="broker-btn" id="broker-btn" onclick="App.toggleMqtt()">Connect</button>
+      </div>
+
+      <div class="section-label">Broker Settings</div>
+      <div class="conn-card">
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Host</div>
+            <div class="conn-row-sub">HiveMQ Cloud or custom</div>
+          </div>
+          <input class="conn-input" id="cfg-host" placeholder="broker.hivemq.com" style="max-width:160px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Port</div>
+            <div class="conn-row-sub">WebSocket port</div>
+          </div>
+          <input class="conn-input" id="cfg-port" placeholder="8884" type="number" style="max-width:80px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Username</div>
+            <div class="conn-row-sub">Broker credentials</div>
+          </div>
+          <input class="conn-input" id="cfg-user" placeholder="lodestone" autocomplete="off" style="max-width:130px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Password</div>
+            <div class="conn-row-sub">Broker credentials</div>
+          </div>
+          <input class="conn-input" id="cfg-pass" type="password" placeholder="••••••" autocomplete="off" style="max-width:130px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Device name</div>
+            <div class="conn-row-sub">Shown to other Lodestones</div>
+          </div>
+          <input class="conn-input" id="cfg-name" placeholder="My Phone" maxlength="15" style="max-width:120px;text-align:right">
+        </div>
+      </div>
+
+      <div class="section-label">My Location</div>
+      <div class="conn-card">
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Share GPS</div>
+            <div class="conn-row-sub" id="gps-status-sub">Waiting for permission</div>
+          </div>
+          <button class="toggle" id="gps-toggle" onclick="App.toggleGps()"></button>
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Coordinates</div>
+            <div class="conn-row-sub" id="my-coords">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height:16px"></div>
+    </div>
+
+  </div>
+
+  <!-- Tab bar -->
+  <nav>
+    <button class="tab active" onclick="App.setTab('map',this)">
+      <svg viewBox="0 0 24 24"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3V6z"/><path d="M9 3v15M15 6v15"/></svg>
+      <span>Map</span>
+    </button>
+    <button class="tab" onclick="App.setTab('locations',this)">
+      <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+      <span>Locations</span>
+    </button>
+    <button class="tab" onclick="App.setTab('devices',this)">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <span>Devices</span>
+    </button>
+    <button class="tab" onclick="App.setTab('messages',this);App.renderMessages()">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span>Messages</span>
+    </button>
+    <button class="tab" onclick="App.setTab('connect',this)">
+      <svg viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0114.08 0"/><path d="M1.42 9a16 16 0 0121.16 0"/><path d="M8.53 16.11a6 6 0 016.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg>
+      <span>Connect</span>
+    </button>
+  </nav>
+
+</div>
+
+<!-- Pair request modal -->
+<div class="modal-overlay" id="pair-modal">
+  <div class="modal">
+    <div class="modal-title" id="pair-title">Connection Request</div>
+    <div class="modal-sub" id="pair-sub">wants to connect to your Lodestone</div>
+    <div class="modal-btns">
+      <button class="modal-btn decline" onclick="App.declinePair()">Decline</button>
+      <button class="modal-btn accept" onclick="App.acceptPair()">Accept</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="js/app.js"></script>
+
+</body>
+</html>
