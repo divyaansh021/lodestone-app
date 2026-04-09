@@ -288,7 +288,39 @@ nav{
 .marker-device{background:var(--green)}
 .marker-saved{background:var(--amber)}
 .leaflet-container{background:#0d1117}
-.leaflet-tile{filter:brightness(.85) saturate(.7) hue-rotate(180deg)}
+.map-search{
+  position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  z-index:500;width:calc(100% - 24px);max-width:340px;
+  display:flex;gap:0;
+}
+.map-search input{
+  flex:1;background:var(--bg1);border:1px solid var(--border);
+  border-right:none;border-radius:10px 0 0 10px;
+  padding:10px 14px;font-size:14px;color:var(--text);
+  outline:none;font-family:var(--font-ui);
+  caret-color:var(--amber);
+}
+.map-search input::placeholder{color:var(--text3)}
+.map-search input:focus{border-color:var(--amber)}
+.map-search button{
+  background:var(--amber);border:none;border-radius:0 10px 10px 0;
+  padding:10px 14px;cursor:pointer;color:#000;font-size:14px;
+  display:flex;align-items:center;justify-content:center;
+}
+.map-search button:active{opacity:.8}
+.map-search-results{
+  position:absolute;top:52px;left:50%;transform:translateX(-50%);
+  z-index:501;width:calc(100% - 24px);max-width:340px;
+  background:var(--bg1);border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;display:none;
+}
+.map-search-result{
+  padding:10px 14px;font-size:13px;color:var(--text);cursor:pointer;
+  border-bottom:1px solid var(--border);
+}
+.map-search-result:last-child{border-bottom:none}
+.map-search-result:active{background:var(--bg2)}
+.map-search-result small{display:block;font-size:11px;color:var(--text2);margin-top:2px}
 </style>
 </head>
 <body>
@@ -310,6 +342,14 @@ nav{
     <div class="screen active" id="screen-map">
       <div id="map">
         <div id="leaflet-map"></div>
+        <div class="map-search">
+          <input id="map-search-input" type="text" placeholder="Search location..." autocomplete="off"
+            onkeydown="if(event.key==='Enter')App.searchMap()">
+          <button onclick="App.searchMap()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+        </div>
+        <div class="map-search-results" id="map-search-results"></div>
         <div class="map-pin-popup" id="pin-popup">
           <div class="pp-title">Pin this location?</div>
           <div class="coord" id="pin-coord">—</div>
@@ -468,5 +508,17 @@ nav{
 <div class="toast" id="toast"></div>
 
 <script src="js/app.js"></script>
+<script>
+// Global wrappers for inline onclick handlers
+function confirmUsername() {
+  const val = (document.getElementById('username-input').value || '').trim();
+  if (!val) { App && typeof toast === 'function' ? toast('Please enter a name') : alert('Please enter a name'); return; }
+  localStorage.setItem('lode_username', val.slice(0,15));
+  if (typeof state !== 'undefined') state.deviceName = val.slice(0,15);
+  document.getElementById('cfg-name').value = val.slice(0,15);
+  const overlay = document.getElementById('username-overlay');
+  if (overlay) overlay.remove();
+}
+</script>
 </body>
 </html>

@@ -46,6 +46,11 @@ const App = (() => {
       maxZoom: 19,
     }).addTo(map);
 
+    // Hide search results on map click
+    map.on('click', () => {
+      document.getElementById('map-search-results').style.display = 'none';
+    });
+
     // Tap to pin
     map.on('click', e => {
       const { lat, lng } = e.latlng;
@@ -169,8 +174,10 @@ const App = (() => {
       // Subscribe to announce and pair request topics
       state.mqttClient.subscribe('lodestone/announce');
       state.mqttClient.subscribe('lodestone/devices/#');
-      state.mqttClient.subscribe(`lodestone/request/${state.myMac}`);
-      state.mqttClient.subscribe(`lodestone/accept/${state.myMac}`);
+      // Subscribe to incoming pair requests (colons stripped to match firmware)
+      const myCleanMac = state.myMac.replace(/:/g, '');
+      state.mqttClient.subscribe(`lodestone/request/${myCleanMac}`);
+      state.mqttClient.subscribe(`lodestone/accept/${myCleanMac}`);
       // Subscribe to paired device topics
       state.pairedDevices.forEach(mac => {
         state.mqttClient.subscribe(`lodestone/pair/${pairTopic(state.myMac, mac)}`);
@@ -239,12 +246,16 @@ const App = (() => {
 
     if (topic === 'lodestone/announce') {
       if (data.mac === state.myMac) return;
-      // Show in devices list even before pairing
+      const isHw = (data.type === 'hardware');
       if (!state.devices[data.mac]) {
-        state.devices[data.mac] = { name: data.name, lat: null, lon: null, heading: 0, lastSeen: Date.now() };
+        state.devices[data.mac] = {
+          name: data.name, lat: null, lon: null, heading: 0,
+          lastSeen: Date.now(), isHardware: isHw,
+        };
       } else {
-        state.devices[data.mac].lastSeen = Date.now();
-        state.devices[data.mac].name = data.name;
+        state.devices[data.mac].lastSeen   = Date.now();
+        state.devices[data.mac].name       = data.name;
+        state.devices[data.mac].isHardware = isHw;
       }
       renderDevices();
     }
@@ -290,6 +301,7 @@ const App = (() => {
     state.mqttClient.publish('lodestone/announce', JSON.stringify({
       name: state.deviceName,
       mac: state.myMac,
+      type: 'app',   // identifies this as a phone/browser client, not hardware
     }));
   }
 
@@ -311,11 +323,15 @@ const App = (() => {
 
   function sendPairRequest(mac) {
     if (!state.mqttConnected) { toast('Connect to broker first'); return; }
-    state.mqttClient.publish(`lodestone/request/${mac}`, JSON.stringify({
+    // Strip colons to match firmware subscription topic format
+    const cleanMac = mac.replace(/:/g, '');
+    const myCleanMac = state.myMac.replace(/:/g, '');
+    state.mqttClient.publish(`lodestone/request/${cleanMac}`, JSON.stringify({
       name: state.deviceName,
-      mac: state.myMac,
+      mac: myCleanMac,
+      type: 'app',
     }));
-    toast('Pair request sent — waiting for acceptance');
+    toast('Pair request sent — waiting for acceptance on device');
   }
 
   function acceptPair() {
@@ -429,8 +445,16 @@ const App = (() => {
 
   function renderDevices() {
     const el = document.getElementById('device-list');
-    const macs = Object.keys(state.devices);
-    if (macs.length === 0) {
+    // Prune stale (>30s)
+    const now = Date.now();
+    Object.keys(state.devices).forEach(mac => {
+      if (now - state.devices[mac].lastSeen > 30000) delete state.devices[mac];
+    });
+
+    const hw  = Object.entries(state.devices).filter(([,d]) => d.isHardware);
+    const app = Object.entries(state.devices).filter(([,d]) => !d.isHardware);
+
+    if (hw.length === 0 && app.length === 0) {
       el.innerHTML = `<div class="empty">
         <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
         <p>No devices discovered</p>
@@ -439,29 +463,36 @@ const App = (() => {
       return;
     }
 
-    // Prune stale (>20s)
-    const now = Date.now();
-    macs.forEach(mac => { if (now - state.devices[mac].lastSeen > 20000) delete state.devices[mac]; });
+    const deviceRow = ([mac, d]) => {
+      const paired = state.pairedDevices.includes(mac);
+      const age = Math.round((Date.now() - d.lastSeen) / 1000);
+      const distStr = (d.lat != null && state.myLat != null)
+        ? formatDist(haversine(state.myLat, state.myLon, d.lat, d.lon))
+        : 'tap to pair';
+      const icon = d.isHardware
+        ? `<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>`
+        : `<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>`;
+      return `
+        <div class="list-item" onclick="App.sendPairRequest('${mac}')">
+          <div class="list-icon ${paired ? 'green' : d.isHardware ? 'amber' : 'blue'}">${icon}</div>
+          <div class="item-info">
+            <div class="item-name">${d.name}</div>
+            <div class="item-sub">${distStr} · ${age}s ago</div>
+          </div>
+          <span class="item-badge ${paired ? 'badge-live' : 'badge-off'}">${paired ? 'PAIRED' : 'TAP TO PAIR'}</span>
+        </div>`;
+    };
 
-    el.innerHTML = '<div class="section-label">Discovered</div>' +
-      Object.entries(state.devices).map(([mac, d]) => {
-        const paired = state.pairedDevices.includes(mac);
-        const age = Math.round((Date.now() - d.lastSeen) / 1000);
-        const distStr = (d.lat != null && state.myLat != null)
-          ? formatDist(haversine(state.myLat, state.myLon, d.lat, d.lon))
-          : 'distance unknown';
-        return `
-          <div class="list-item" onclick="App.sendPairRequest('${mac}')">
-            <div class="list-icon ${paired ? 'green' : 'blue'}">
-              <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-            </div>
-            <div class="item-info">
-              <div class="item-name">${d.name}</div>
-              <div class="item-sub">${distStr} · ${age}s ago</div>
-            </div>
-            <span class="item-badge ${paired ? 'badge-live' : 'badge-off'}">${paired ? 'PAIRED' : 'TAP TO PAIR'}</span>
-          </div>`;
-      }).join('');
+    let html = '';
+    if (hw.length > 0) {
+      html += `<div class="section-label">Lodestone Devices (${hw.length})</div>`;
+      html += hw.map(deviceRow).join('');
+    }
+    if (app.length > 0) {
+      html += `<div class="section-label">App Users (${app.length})</div>`;
+      html += app.map(deviceRow).join('');
+    }
+    el.innerHTML = html;
   }
 
   function renderConnectScreen() {
@@ -575,7 +606,11 @@ const App = (() => {
     document.getElementById('cfg-pass').value = state.cfg.pass;
 
   // Config auto-save
-    ['cfg-host','cfg-port','cfg-name'].forEach(id => {
+    document.getElementById('cfg-name').addEventListener('change', e => {
+    const v = e.target.value.trim();
+    if (v) { state.deviceName = v; localStorage.setItem('lode_username', v); }
+  });
+  ['cfg-host','cfg-port','cfg-name'].forEach(id => {
       document.getElementById(id).addEventListener('change', () => {
         try {
           localStorage.setItem('lode_cfg', JSON.stringify({
@@ -598,13 +633,61 @@ const App = (() => {
 
   document.addEventListener('DOMContentLoaded', init);
 
+
+  // ── Map search (Nominatim — free, no API key) ────────────────────────────
+  let searchMarker = null;
+  async function searchMap() {
+    const q = document.getElementById('map-search-input').value.trim();
+    if (!q) return;
+    const resultsEl = document.getElementById('map-search-results');
+    resultsEl.innerHTML = '<div class="map-search-result">Searching...</div>';
+    resultsEl.style.display = 'block';
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=4`,
+        { headers: { 'Accept-Language': 'en' } }
+      );
+      const data = await res.json();
+      if (!data.length) {
+        resultsEl.innerHTML = '<div class="map-search-result">No results found</div>';
+        return;
+      }
+      resultsEl.innerHTML = data.map((r,i) =>
+        `<div class="map-search-result" onclick="App.selectSearchResult(${r.lat},${r.lon},'${r.display_name.replace(/'/g,"\'")}')">
+          ${r.display_name.split(',').slice(0,2).join(',')}
+          <small>${r.display_name.split(',').slice(2,4).join(',')}</small>
+        </div>`
+      ).join('');
+    } catch(e) {
+      resultsEl.innerHTML = '<div class="map-search-result">Search failed — check connection</div>';
+    }
+  }
+
+  function selectSearchResult(lat, lon, name) {
+    document.getElementById('map-search-results').style.display = 'none';
+    document.getElementById('map-search-input').value = name.split(',').slice(0,2).join(',');
+    const pos = [parseFloat(lat), parseFloat(lon)];
+    map.setView(pos, 15);
+    if (searchMarker) searchMarker.remove();
+    searchMarker = L.marker(pos, { icon: makeIcon('blue') })
+      .bindPopup(name.split(',').slice(0,2).join(','))
+      .addTo(map)
+      .openPopup();
+    // Pre-fill the add-location form with this position
+    state.pinLat = parseFloat(lat);
+    state.pinLon = parseFloat(lon);
+    document.getElementById('pin-coord').textContent =
+      `${parseFloat(lat).toFixed(5)}° N,  ${parseFloat(lon).toFixed(5)}° E`;
+    document.getElementById('pin-popup').classList.add('visible');
+  }
+
   // Public API
   return {
     setTab, toggleGps, toggleMqtt, connectMqtt, disconnectMqtt,
     showAddForm, hideAddForm, saveLocation, deleteLocation,
     addPinnedLocation, dismissPin,
     acceptPair, declinePair,
-    sendPairRequest,
+    sendPairRequest, searchMap, selectSearchResult,
   };
 
 })();
