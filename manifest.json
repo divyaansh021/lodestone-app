@@ -1,0 +1,20 @@
+{
+  "name": "Lodestone",
+  "short_name": "Lodestone",
+  "description": "Companion app for the Lodestone GPS navigator",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "categories": ["navigation", "utilities"],
+  "shortcuts": [
+    { "name": "Map", "url": "/?tab=map", "description": "Open map view" },
+    { "name": "Locations", "url": "/?tab=locations", "description": "Manage saved locations" }
+  ]
+}
