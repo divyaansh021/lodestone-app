@@ -22,8 +22,10 @@ const App = (() => {
     myMac: randomMac(),
     deviceName: 'My Phone',
     cfg: {
-      host: 'broker.hivemq.com',
+      host: 'f2e56e6599344b86aa506ab8bc78ce52.s1.eu.hivemq.cloud',
       port: '8884',
+      user: 'lodestone',
+      pass: 'Lode$tone2026',
     }
   };
 
@@ -40,7 +42,7 @@ const App = (() => {
       attributionControl: false,
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
     }).addTo(map);
 
@@ -151,8 +153,12 @@ const App = (() => {
     setBrokerState('connecting', `wss://${host}:${port}/mqtt`, 'Connecting...');
 
     const url = `wss://${host}:${port}/mqtt`;
+    const user = document.getElementById('cfg-user').value.trim() || state.cfg.user;
+    const pass = document.getElementById('cfg-pass').value.trim() || state.cfg.pass;
     state.mqttClient = mqtt.connect(url, {
       clientId: 'lodestone_app_' + Math.random().toString(36).slice(2),
+      username: user,
+      password: pass,
       reconnectPeriod: 5000,
       connectTimeout: 10000,
     });
@@ -162,6 +168,7 @@ const App = (() => {
       setBrokerState('connected', host + ':' + port, 'Connected');
       // Subscribe to announce and pair request topics
       state.mqttClient.subscribe('lodestone/announce');
+      state.mqttClient.subscribe('lodestone/devices/#');
       state.mqttClient.subscribe(`lodestone/request/${state.myMac}`);
       state.mqttClient.subscribe(`lodestone/accept/${state.myMac}`);
       // Subscribe to paired device topics
@@ -212,6 +219,24 @@ const App = (() => {
   }
 
   function handleMessage(topic, data) {
+    // Position update from Lodestone hardware firmware
+    if (topic.startsWith('lodestone/devices/')) {
+      const mac = data.mac || topic.split('/')[2];
+      if (!mac || mac === state.myMac) return;
+      state.devices[mac] = {
+        ...(state.devices[mac] || {}),
+        name: data.name || 'Lodestone',
+        lat: data.lat, lon: data.lon,
+        heading: data.heading || 0,
+        speed: data.speed || 0,
+        lastSeen: Date.now(),
+        isHardware: true,
+      };
+      updateDeviceMarker(mac);
+      renderDevices();
+      document.getElementById('gps-badge').classList.add('fix');
+    }
+
     if (topic === 'lodestone/announce') {
       if (data.mac === state.myMac) return;
       // Show in devices list even before pairing
@@ -482,6 +507,8 @@ const App = (() => {
       const c = JSON.parse(localStorage.getItem('lode_cfg') || '{}');
       if (c.host) document.getElementById('cfg-host').value = c.host;
       if (c.port) document.getElementById('cfg-port').value = c.port;
+      if (c.user) document.getElementById('cfg-user').value = c.user;
+      if (c.pass) document.getElementById('cfg-pass').value = c.pass;
       if (c.name) { document.getElementById('cfg-name').value = c.name; state.deviceName = c.name; }
     } catch(e) {}
   }
@@ -537,7 +564,17 @@ const App = (() => {
     updateSavedMarkers();
     startAnnounceLoop();
 
-    // Config auto-save
+    // Pre-fill defaults if inputs are empty
+  if (!document.getElementById('cfg-host').value)
+    document.getElementById('cfg-host').value = state.cfg.host;
+  if (!document.getElementById('cfg-port').value)
+    document.getElementById('cfg-port').value = state.cfg.port;
+  if (!document.getElementById('cfg-user').value)
+    document.getElementById('cfg-user').value = state.cfg.user;
+  if (!document.getElementById('cfg-pass').value)
+    document.getElementById('cfg-pass').value = state.cfg.pass;
+
+  // Config auto-save
     ['cfg-host','cfg-port','cfg-name'].forEach(id => {
       document.getElementById(id).addEventListener('change', () => {
         try {

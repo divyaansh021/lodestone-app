@@ -288,7 +288,7 @@ nav{
 .marker-device{background:var(--green)}
 .marker-saved{background:var(--amber)}
 .leaflet-container{background:#0d1117}
-.leaflet-tile
+.leaflet-tile{filter:brightness(.85) saturate(.7) hue-rotate(180deg)}
 </style>
 </head>
 <body>
@@ -384,6 +384,20 @@ nav{
             <div class="conn-row-sub">WebSocket port</div>
           </div>
           <input class="conn-input" id="cfg-port" placeholder="8884" type="number" style="max-width:80px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Username</div>
+            <div class="conn-row-sub">Broker credentials</div>
+          </div>
+          <input class="conn-input" id="cfg-user" placeholder="lodestone" autocomplete="off" style="max-width:130px;text-align:right">
+        </div>
+        <div class="conn-row">
+          <div class="conn-row-info">
+            <div class="conn-row-label">Password</div>
+            <div class="conn-row-sub">Broker credentials</div>
+          </div>
+          <input class="conn-input" id="cfg-pass" type="password" placeholder="••••••" autocomplete="off" style="max-width:130px;text-align:right">
         </div>
         <div class="conn-row">
           <div class="conn-row-info">
