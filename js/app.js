@@ -286,7 +286,8 @@ const App = (() => {
       document.getElementById('pair-modal').classList.add('visible');
     }
 
-    if (topic === `lodestone/accept/${state.myMac}`) {
+    const myCleanForAccept = state.myMac.replace(/:/g,"");
+    if (topic === `lodestone/accept/${myCleanForAccept}`) {
       // Our pair request was accepted
       const mac = data.mac;
       if (!state.pairedDevices.includes(mac)) {
@@ -500,7 +501,7 @@ const App = (() => {
 
     const deviceRow = ([mac, d]) => {
       const cleanMacKey = mac.replace(/:/g,"");
-      const paired = state.pairedDevices.includes(mac) || state.pairedDevices.includes(cleanMacKey);
+      const paired = state.pairedDevices.some(p => p.replace(/:/g,"") === cleanMacKey);
       const age = Math.round((Date.now() - d.lastSeen) / 1000);
       const distStr = (d.lat != null && state.myLat != null)
         ? formatDist(haversine(state.myLat, state.myLon, d.lat, d.lon))
@@ -644,14 +645,71 @@ const App = (() => {
     return m >= 1000 ? (m/1000).toFixed(1)+'km' : Math.round(m)+'m';
   }
 
+
+  function showUsernamePrompt() {
+    const overlay = document.createElement('div');
+    overlay.id = 'username-overlay';
+    overlay.style.cssText = [
+      'position:fixed','inset:0','background:var(--bg0)','z-index:9999',
+      'display:flex','flex-direction:column','align-items:center',
+      'justify-content:center','padding:32px','gap:20px'
+    ].join(';');
+    overlay.innerHTML = `
+      <div style="font-size:28px;font-weight:700;color:var(--amber);font-family:var(--font-mono);letter-spacing:.1em">LODESTONE</div>
+      <div style="font-size:14px;color:var(--text2);text-align:center;line-height:1.7;max-width:280px">
+        Enter your name.<br>This identifies you to other Lodestone users.
+      </div>
+      <input id="un-input" type="text" maxlength="15" placeholder="e.g. Ravi"
+        style="width:100%;max-width:280px;background:var(--bg2);border:2px solid var(--amber);
+               border-radius:10px;padding:13px 16px;font-size:16px;color:var(--text);
+               outline:none;text-align:center;font-family:var(--font-ui);"
+        autocomplete="off" autocorrect="off" spellcheck="false">
+      <button id="un-btn" style="width:100%;max-width:280px;padding:13px;border-radius:10px;
+        border:none;background:var(--amber);color:#000;font-size:15px;font-weight:700;
+        cursor:pointer;">Continue</button>
+      <div style="font-size:11px;color:var(--text3)">You can change this later in the Connect tab</div>
+    `;
+    document.body.appendChild(overlay);
+
+    function confirm() {
+      const val = (document.getElementById('un-input').value || '').trim();
+      if (!val) { toast('Please enter your name'); return; }
+      const name = val.slice(0, 15);
+      state.deviceName = name;
+      localStorage.setItem('lode_username', name);
+      try { document.getElementById('cfg-name').value = name; } catch(e) {}
+      loadPaired();
+      overlay.remove();
+      if (state.mqttConnected) announcePresence();
+      toast('Welcome, ' + name + '!');
+    }
+
+    setTimeout(() => {
+      document.getElementById('un-btn').onclick = confirm;
+      document.getElementById('un-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') confirm();
+      });
+      document.getElementById('un-input').focus();
+    }, 50);
+  }
+
   // ── Init ────────────────────────────────────────────────────────
   function init() {
     loadLocationsLocal();
-    loadPaired();
     loadConfig();
     initMap();
     updateSavedMarkers();
     startAnnounceLoop();
+
+    // ── Username prompt — must happen before loadPaired() ──────────────
+    const storedName = localStorage.getItem('lode_username');
+    if (!storedName) {
+      showUsernamePrompt();
+    } else {
+      state.deviceName = storedName;
+      try { document.getElementById('cfg-name').value = storedName; } catch(e) {}
+      loadPaired();
+    }
 
     // Pre-fill defaults if inputs are empty
   if (!document.getElementById('cfg-host').value)
@@ -743,11 +801,22 @@ const App = (() => {
     const msg = (input.value || '').trim();
     if (!msg) return;
     if (!state.mqttConnected) { toast('Connect to broker first'); return; }
-    state.mqttClient.publish('lodestone/msg/broadcast', JSON.stringify({
-      from: state.deviceName,
-      mac: state.myMac,
-      msg,
-    }));
+    const payload = JSON.stringify({ from: state.deviceName, mac: state.myMac, msg });
+    // 1. Broadcast topic (all app users see it)
+    state.mqttClient.publish('lodestone/msg/broadcast', payload);
+    // 2. Send directly to each paired Lodestone hardware device
+    //    Firmware subscribes to lodestone/msg/<cleanMac>
+    state.pairedDevices.forEach(mac => {
+      const cleanMac = mac.replace(/:/g,'');
+      state.mqttClient.publish(`lodestone/msg/${cleanMac}`, payload);
+    });
+    // 3. Also send to any hardware device we know about
+    Object.entries(state.devices).forEach(([mac, d]) => {
+      if (d.isHardware) {
+        const cleanMac = mac.replace(/:/g,'');
+        state.mqttClient.publish(`lodestone/msg/${cleanMac}`, payload);
+      }
+    });
     if (!state.messages) state.messages = [];
     state.messages.unshift({ from: 'Me', msg, time: Date.now() });
     input.value = '';
