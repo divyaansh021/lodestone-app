@@ -14,6 +14,7 @@ const App = (() => {
     pairedDevices: [],
     pendingPairFrom: null,
     pinLat: null, pinLon: null,
+    unpairedSet: new Set(), // MACs we explicitly unpaired this session
     myMac: getOrCreateMac(),
     deviceName: 'My Device',
     messages: [],
@@ -301,6 +302,8 @@ const App = (() => {
     if (topic.startsWith('lodestone/devices/')) {
       const mac = data.mac || topic.split('/')[2];
       if (!mac || mac === myClean || mac === state.myMac) return;
+      // Ignore position updates from explicitly unpaired devices
+      if (state.unpairedSet.has(cleanMac(mac))) return;
       state.devices[mac] = { ...(state.devices[mac]||{}), name:data.name||'Lodestone', lat:data.lat, lon:data.lon, heading:data.heading||0, speed:data.speed||0, lastSeen:Date.now(), isHardware:true };
       if (isPaired(mac)) { updateDeviceMarker(mac); savePairedPositions(); }
       renderDevices();
@@ -310,6 +313,8 @@ const App = (() => {
     // Announce
     if (topic === 'lodestone/announce') {
       if (data.mac === state.myMac || cleanMac(data.mac) === myClean) return;
+      // Ignore announces from devices we explicitly unpaired this session
+      if (state.unpairedSet.has(cleanMac(data.mac))) return;
       const isHw = data.type === 'hardware';
       const mac = data.mac;
       state.devices[mac] = { ...(state.devices[mac]||{}), name:data.name||'Device', lastSeen:Date.now(), isHardware:isHw, lat:state.devices[mac]?.lat||null, lon:state.devices[mac]?.lon||null };
@@ -361,6 +366,8 @@ const App = (() => {
   // ── Pairing ────────────────────────────────────────────────────────────────
   function sendPairRequest(mac) {
     if (!state.mqttConnected) { toast('Connect to broker first'); return; }
+    // Clear from unpaired set so it can be re-added
+    state.unpairedSet.delete(cleanMac(mac));
     const c = cleanMac(mac);
     state.mqttClient.publish(`lodestone/request/${c}`, JSON.stringify({
       name: state.deviceName, mac: cleanMac(state.myMac), type: 'app',
@@ -396,16 +403,41 @@ const App = (() => {
 
   function unpairDevice(mac) {
     const c = cleanMac(mac);
+
+    // Remove from paired list and persist
     state.pairedDevices = state.pairedDevices.filter(p => cleanMac(p) !== c);
     savePaired();
+
+    // Unsubscribe from pair topics
     if (state.mqttClient) {
       const myClean = cleanMac(state.myMac);
       state.mqttClient.unsubscribe(`lodestone/pair/${myClean}_${c}`);
       state.mqttClient.unsubscribe(`lodestone/pair/${c}_${myClean}`);
+      // Notify the Lodestone device it has been unpaired
+      state.mqttClient.publish(`lodestone/unpair/${c}`, JSON.stringify({
+        mac: myClean, name: state.deviceName,
+      }));
     }
-    if (deviceMarkers[mac]) { deviceMarkers[mac].remove(); delete deviceMarkers[mac]; }
-    toast('Unpaired');
+
+    // Remove map marker (try both mac formats)
+    [mac, c].forEach(key => {
+      if (deviceMarkers[key]) { deviceMarkers[key].remove(); delete deviceMarkers[key]; }
+    });
+
+    // Remove from device list and location cache entirely
+    delete state.devices[mac];
+    delete state.devices[c];
+    delete state.deviceLocations[mac];
+    delete state.deviceLocations[c];
+
+    // Track as explicitly unpaired so announce doesn't re-add it
+    state.unpairedSet.add(c);
+    // Reset message recipient if it was this device
+    if (cleanMac(state.msgRecipient) === c) state.msgRecipient = 'broadcast';
+
+    toast('Unpaired — device removed');
     renderDevices();
+    renderLocations();
   }
 
   // ── Locations ──────────────────────────────────────────────────────────────
@@ -656,7 +688,10 @@ const App = (() => {
     let toName = 'Everyone';
     if (recipient === 'broadcast') {
       state.mqttClient.publish('lodestone/msg/broadcast', payload);
-      state.pairedDevices.forEach(mac => state.mqttClient.publish(`lodestone/msg/${cleanMac(mac)}`, payload));
+      // Only send to currently paired devices (not ones just unpaired)
+      state.pairedDevices
+        .filter(mac => !state.unpairedSet.has(cleanMac(mac)))
+        .forEach(mac => state.mqttClient.publish(`lodestone/msg/${cleanMac(mac)}`, payload));
     } else {
       const c = cleanMac(recipient);
       state.mqttClient.publish(`lodestone/msg/${c}`, payload);
