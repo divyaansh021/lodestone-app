@@ -399,6 +399,16 @@ nav{
     <!-- MESSAGES -->
     <div class="screen" id="screen-messages">
       <div class="sh"><span class="sh-title">Messages</span></div>
+      <!-- Recipient selector scrollable row -->
+      <div id="msg-recipient-bar" style="
+        display:flex;gap:6px;padding:8px 16px;overflow-x:auto;flex-shrink:0;
+        border-bottom:1px solid var(--border);-webkit-overflow-scrolling:touch;
+      ">
+        <button onclick="App.setMsgRecipient('broadcast')" style="
+          padding:5px 12px;border-radius:20px;border:1px solid var(--amber);
+          background:var(--amber-dim);color:var(--amber);font-size:11px;cursor:pointer;
+          white-space:nowrap;font-family:var(--font-ui);">Everyone (broadcast)</button>
+      </div>
       <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0">
         <input id="msg-input" type="text" placeholder="Type a message..." maxlength="50"
           style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;

@@ -18,6 +18,7 @@ const App = (() => {
     devices: {},             // mac → {name,lat,lon,heading,lastSeen}
     pairedDevices: [],       // [mac]
     pendingPairFrom: null,   // {name, mac, topic}
+    msgRecipient: 'broadcast', // 'broadcast' or a device mac
     pinLat: null, pinLon: null,
     myMac: randomMac(),
     deviceName: 'My Phone',
@@ -175,6 +176,8 @@ const App = (() => {
       state.mqttClient.subscribe('lodestone/announce');
       state.mqttClient.subscribe('lodestone/devices/#');
       state.mqttClient.subscribe('lodestone/msg/broadcast');
+      const myCleanMacForMsg = state.myMac.replace(/:/g,'');
+      state.mqttClient.subscribe(`lodestone/msg/${myCleanMacForMsg}`);
       // Subscribe to incoming pair requests (colons stripped to match firmware)
       const myCleanMac = state.myMac.replace(/:/g, '');
       state.mqttClient.subscribe(`lodestone/request/${myCleanMac}`);
@@ -188,6 +191,8 @@ const App = (() => {
         state.mqttClient.subscribe(`lodestone/pair/${cleanMac}_${myClean}`);
       });
       state.mqttClient.subscribe('lodestone/msg/broadcast');
+      const myCleanMacForMsg = state.myMac.replace(/:/g,'');
+      state.mqttClient.subscribe(`lodestone/msg/${myCleanMacForMsg}`);
       announcePresence();
       toast('Connected to broker');
     });
@@ -232,8 +237,9 @@ const App = (() => {
   }
 
   function handleMessage(topic, data) {
-    // Incoming message from Lodestone device or other user
-    if (topic === 'lodestone/msg/broadcast') {
+    // Incoming message — from broadcast or personal topic
+    const myCleanForMsg = state.myMac.replace(/:/g,"");
+    if (topic === 'lodestone/msg/broadcast' || topic === `lodestone/msg/${myCleanForMsg}`) {
       const from = data.from || 'Unknown';
       const msg  = data.msg  || '';
       if (!state.messages) state.messages = [];
@@ -248,6 +254,7 @@ const App = (() => {
     if (topic.startsWith('lodestone/devices/')) {
       const mac = data.mac || topic.split('/')[2];
       if (!mac || mac === state.myMac) return;
+      // Update device record regardless (so devices tab shows it)
       state.devices[mac] = {
         ...(state.devices[mac] || {}),
         name: data.name || 'Lodestone',
@@ -257,9 +264,14 @@ const App = (() => {
         lastSeen: Date.now(),
         isHardware: true,
       };
-      updateDeviceMarker(mac);
+      // Only show on MAP if this device is paired
+      const cleanMac = mac.replace(/:/g,'');
+      const isPairedDevice = state.pairedDevices.some(p => p.replace(/:/g,'') === cleanMac);
+      if (isPairedDevice) {
+        updateDeviceMarker(mac);
+        savePairedPositions();
+      }
       renderDevices();
-      document.getElementById('gps-badge').classList.add('fix');
     }
 
     if (topic === 'lodestone/announce') {
@@ -278,11 +290,15 @@ const App = (() => {
       renderDevices();
     }
 
-    if (topic === `lodestone/request/${state.myMac}`) {
-      // Incoming pair request — show modal
-      state.pendingPairFrom = { name: data.name, mac: data.mac };
-      document.getElementById('pair-title').textContent = `"${data.name}" wants to connect`;
-      document.getElementById('pair-sub').textContent = 'Accept to share live location with this Lodestone device.';
+    // Pair request arrives on clean-MAC topic (no colons) — firmware strips them
+    const myCleanForReq = state.myMac.replace(/:/g,"");
+    if (topic === `lodestone/request/${myCleanForReq}` ||
+        topic === `lodestone/request/${state.myMac}`) {
+      const reqName = data.name || 'Unknown';
+      const reqMac  = (data.mac || '').replace(/:/g,"");
+      state.pendingPairFrom = { name: reqName, mac: reqMac };
+      document.getElementById('pair-title').textContent = `"${reqName}" wants to connect`;
+      document.getElementById('pair-sub').textContent = 'Accept to share live location with this device.';
       document.getElementById('pair-modal').classList.add('visible');
     }
 
@@ -774,6 +790,7 @@ const App = (() => {
   }
 
   function renderMessages() {
+    renderMsgRecipientBar();
     const el = document.getElementById('msg-list');
     if (!el) return;
     if (!state.messages || !state.messages.length) {
@@ -786,13 +803,51 @@ const App = (() => {
     el.innerHTML = state.messages.map(m => {
       const t = new Date(m.time);
       const timeStr = t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0');
+      const toLabel = m.to && m.to !== 'Everyone' ? ` → ${m.to}` : '';
       return `<div class="list-item" style="flex-direction:column;align-items:flex-start;gap:4px">
         <div style="display:flex;width:100%;justify-content:space-between">
-          <span style="font-size:12px;font-weight:600;color:var(--amber)">${m.from}</span>
+          <span style="font-size:12px;font-weight:600;color:var(--amber)">${m.from}${toLabel}</span>
           <span style="font-size:11px;color:var(--text3)">${timeStr}</span>
         </div>
         <div style="font-size:14px;color:var(--text)">${m.msg}</div>
       </div>`;
+    }).join('');
+  }
+
+  function setMsgRecipient(mac) {
+    state.msgRecipient = mac;
+    renderMsgRecipientBar();
+  }
+
+  function renderMsgRecipientBar() {
+    const bar = document.getElementById('msg-recipient-bar');
+    if (!bar) return;
+    const allDevices = [
+      { mac: 'broadcast', name: 'Everyone (broadcast)' },
+      ...state.pairedDevices.map(mac => {
+        const d = state.devices[mac] || state.devices[mac.replace(/:/g,'')] || {};
+        return { mac, name: d.name || mac };
+      }),
+      ...Object.entries(state.devices)
+        .filter(([,d]) => !d.isHardware)
+        .map(([mac,d]) => ({ mac, name: d.name || mac }))
+    ];
+    // Deduplicate by mac
+    const seen = new Set();
+    const unique = allDevices.filter(d => {
+      const k = d.mac.replace(/:/g,'');
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    bar.innerHTML = unique.map(d => {
+      const cleanKey = d.mac.replace(/:/g,'');
+      const selectedKey = state.msgRecipient.replace(/:/g,'');
+      const active = cleanKey === selectedKey;
+      return `<button onclick="App.setMsgRecipient('${d.mac}')" style="
+        padding:5px 12px;border-radius:20px;border:1px solid ${active ? 'var(--amber)' : 'var(--border)'};
+        background:${active ? 'var(--amber-dim)' : 'none'};color:${active ? 'var(--amber)' : 'var(--text2)'};
+        font-size:11px;cursor:pointer;white-space:nowrap;font-family:var(--font-ui);
+      ">${d.name}</button>`;
     }).join('');
   }
 
@@ -801,27 +856,34 @@ const App = (() => {
     const msg = (input.value || '').trim();
     if (!msg) return;
     if (!state.mqttConnected) { toast('Connect to broker first'); return; }
-    const payload = JSON.stringify({ from: state.deviceName, mac: state.myMac, msg });
-    // 1. Broadcast topic (all app users see it)
-    state.mqttClient.publish('lodestone/msg/broadcast', payload);
-    // 2. Send directly to each paired Lodestone hardware device
-    //    Firmware subscribes to lodestone/msg/<cleanMac>
-    state.pairedDevices.forEach(mac => {
-      const cleanMac = mac.replace(/:/g,'');
-      state.mqttClient.publish(`lodestone/msg/${cleanMac}`, payload);
-    });
-    // 3. Also send to any hardware device we know about
-    Object.entries(state.devices).forEach(([mac, d]) => {
-      if (d.isHardware) {
-        const cleanMac = mac.replace(/:/g,'');
+    const payload = JSON.stringify({ from: state.deviceName, mac: state.myMac.replace(/:/g,''), msg });
+    const recipient = state.msgRecipient || 'broadcast';
+
+    if (recipient === 'broadcast') {
+      // Send to all paired hardware devices + broadcast topic
+      state.mqttClient.publish('lodestone/msg/broadcast', payload);
+      state.pairedDevices.forEach(mac => {
+        state.mqttClient.publish(`lodestone/msg/${mac.replace(/:/g,'')}`, payload);
+      });
+    } else {
+      // Send to specific device only
+      const cleanMac = recipient.replace(/:/g,'');
+      const d = state.devices[recipient] || state.devices[cleanMac];
+      if (d && d.isHardware) {
+        state.mqttClient.publish(`lodestone/msg/${cleanMac}`, payload);
+      } else {
+        // App user — use their individual msg topic
         state.mqttClient.publish(`lodestone/msg/${cleanMac}`, payload);
       }
-    });
+    }
+
     if (!state.messages) state.messages = [];
-    state.messages.unshift({ from: 'Me', msg, time: Date.now() });
+    const recipientName = recipient === 'broadcast' ? 'Everyone'
+      : (state.devices[recipient] || state.devices[recipient.replace(/:/g,'')] || {}).name || recipient;
+    state.messages.unshift({ from: 'Me', msg, to: recipientName, time: Date.now() });
     input.value = '';
     renderMessages();
-    toast('Message sent');
+    toast('Sent to ' + recipientName);
   }
 
   // ── Map search (Nominatim — free, no API key) ────────────────────────────
@@ -879,7 +941,7 @@ const App = (() => {
     acceptPair, declinePair,
     sendPairRequest, unpairDevice,
     searchMap, selectSearchResult,
-    renderMessages, sendMessage,
+    renderMessages, sendMessage, setMsgRecipient, renderMsgRecipientBar,
   };
 
 })();
