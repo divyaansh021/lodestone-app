@@ -19,6 +19,8 @@ const App = (() => {
     pairedDevices: [],       // [mac]
     pendingPairFrom: null,   // {name, mac, topic}
     msgRecipient: 'broadcast', // 'broadcast' or a device mac
+    deviceLocations: {},      // mac → [{name,lat,lon}]
+    selectedLocDevice: null,  // which device's locations are shown
     pinLat: null, pinLon: null,
     myMac: randomMac(),
     deviceName: 'My Phone',
@@ -176,6 +178,7 @@ const App = (() => {
       state.mqttClient.subscribe('lodestone/announce');
       state.mqttClient.subscribe('lodestone/devices/#');
       state.mqttClient.subscribe('lodestone/msg/broadcast');
+      state.mqttClient.subscribe('lodestone/loc/response/#');
       const myCleanMacForMsg = state.myMac.replace(/:/g,'');
       state.mqttClient.subscribe(`lodestone/msg/${myCleanMacForMsg}`);
       // Subscribe to incoming pair requests (colons stripped to match firmware)
@@ -191,9 +194,15 @@ const App = (() => {
         state.mqttClient.subscribe(`lodestone/pair/${cleanMac}_${myClean}`);
       });
       state.mqttClient.subscribe('lodestone/msg/broadcast');
+      state.mqttClient.subscribe('lodestone/loc/response/#');
       const myCleanMacForMsg = state.myMac.replace(/:/g,'');
       state.mqttClient.subscribe(`lodestone/msg/${myCleanMacForMsg}`);
       announcePresence();
+      // Request locations from all paired hardware devices
+      state.pairedDevices.forEach(mac => {
+        const cleanMac = mac.replace(/:/g,'');
+        state.mqttClient.publish(`lodestone/loc/request/${cleanMac}`, '1');
+      });
       toast('Connected to broker');
     });
 
@@ -237,6 +246,22 @@ const App = (() => {
   }
 
   function handleMessage(topic, data) {
+    // Location response from a Lodestone device
+    if (topic.startsWith('lodestone/loc/response/')) {
+      const devMac = topic.split('/')[3];
+      // Find device name
+      const devEntry = Object.entries(state.devices).find(([mac]) =>
+        mac.replace(/:/g,'') === devMac || mac === devMac
+      );
+      const devName = devEntry ? devEntry[1].name : devMac.slice(-4);
+      try {
+        const locs = Array.isArray(data) ? data : JSON.parse(data);
+        state.deviceLocations[devMac] = { name: devName, locations: locs };
+        if (state.tab === 'locations') renderLocations();
+      } catch(e) {}
+      return;
+    }
+
     // Incoming message — from broadcast or personal topic
     const myCleanForMsg = state.myMac.replace(/:/g,"");
     if (topic === 'lodestone/msg/broadcast' || topic === `lodestone/msg/${myCleanForMsg}`) {
@@ -427,20 +452,107 @@ const App = (() => {
     if (!name) { toast('Enter a name'); return; }
     if (isNaN(lat) || isNaN(lon)) { toast('Enter valid coordinates'); return; }
     if (state.locations.length >= 10) { toast('Maximum 10 locations'); return; }
-    state.locations.push({ name: name.slice(0,15).toUpperCase(), lat, lon });
-    saveLocationsLocal();
-    updateSavedMarkers();
-    syncLocationsToDevice();
-    hideAddForm();
-    renderLocations();
-    toast(`"${name}" saved`);
+    const locEntry = { name: name.slice(0,15).toUpperCase(), lat, lon };
+    const devKey = state.pendingAddDeviceKey || '__app__';
+    state.pendingAddDeviceKey = null;
+
+    if (devKey === '__app__') {
+      // Save locally only
+      state.locations.push(locEntry);
+      saveLocationsLocal();
+      updateSavedMarkers();
+      hideAddForm();
+      renderLocations();
+      toast(`"${name}" saved to app`);
+    } else if (devKey === '__all__') {
+      // Save to all paired hardware devices
+      state.locations.push(locEntry);
+      saveLocationsLocal();
+      updateSavedMarkers();
+      syncLocationsToDevice();
+      hideAddForm();
+      renderLocations();
+      toast(`"${name}" sent to all devices`);
+    } else {
+      // Send to specific device only via MQTT
+      const cleanMac = devKey.replace(/:/g,'');
+      const devLocs = (state.deviceLocations[cleanMac] || state.deviceLocations[devKey] || { locations: [] }).locations;
+      const updated = [...devLocs, locEntry].slice(0,10);
+      if (state.mqttConnected) {
+        state.mqttClient.publish('lodestone/locations', JSON.stringify({
+          mac: cleanMac,
+          locations: updated,
+        }));
+        // Update local cache
+        if (state.deviceLocations[cleanMac]) state.deviceLocations[cleanMac].locations = updated;
+      }
+      hideAddForm();
+      renderLocations();
+      const devName = (state.devices[devKey] || state.devices[cleanMac] || {}).name || 'device';
+      toast(`"${name}" sent to ${devName}`);
+    }
   }
 
   function addPinnedLocation() {
     if (state.pinLat == null) return;
+    // Show device selector popup
+    showDeviceAddSelector(state.pinLat, state.pinLon);
+  }
+
+  function showDeviceAddSelector(lat, lon) {
+    // Remove existing selector if any
+    const existing = document.getElementById('dev-add-selector');
+    if (existing) existing.remove();
+
+    const pairedHwDevices = Object.entries(state.devices)
+      .filter(([,d]) => d.isHardware);
+
+    const sel = document.createElement('div');
+    sel.id = 'dev-add-selector';
+    sel.style.cssText = `
+      position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1500;
+      display:flex;align-items:flex-end;
+    `;
+    const options = [
+      { key: '__app__', label: 'Save to app only' },
+      ...pairedHwDevices.map(([mac, d]) => ({ key: mac, label: d.name || mac })),
+      ...(pairedHwDevices.length > 1 ? [{ key: '__all__', label: 'Add to ALL devices' }] : []),
+    ];
+    sel.innerHTML = `
+      <div style="width:100%;background:var(--bg1);border-radius:20px 20px 0 0;
+                  border-top:1px solid var(--border);padding:16px 16px 24px;">
+        <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Add location to:</div>
+        <div style="font-size:11px;color:var(--text2);font-family:var(--font-mono);margin-bottom:14px">
+          ${lat.toFixed(5)}° N, ${lon.toFixed(5)}° E
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+          ${options.map(o => `
+            <button onclick="App.confirmAddToDevice('${o.key}',${lat},${lon})" style="
+              width:100%;padding:12px;border-radius:10px;border:1px solid var(--border);
+              background:var(--bg2);color:var(--text);font-size:14px;text-align:left;
+              cursor:pointer;font-family:var(--font-ui);">
+              ${o.key === '__all__' ? '📡 ' : ''}${o.label}
+            </button>`).join('')}
+        </div>
+        <button onclick="document.getElementById('dev-add-selector').remove()" style="
+          width:100%;padding:10px;border-radius:10px;border:none;
+          background:var(--bg3);color:var(--text2);font-size:14px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    `;
+    document.body.appendChild(sel);
+    sel.onclick = e => { if (e.target === sel) sel.remove(); };
+  }
+
+  function confirmAddToDevice(deviceKey, lat, lon) {
+    document.getElementById('dev-add-selector')?.remove();
     document.getElementById('pin-popup').classList.remove('visible');
-    document.getElementById('loc-lat').value = state.pinLat.toFixed(6);
-    document.getElementById('loc-lon').value = state.pinLon.toFixed(6);
+    // Pre-fill coordinates
+    document.getElementById('loc-lat').value = lat.toFixed(6);
+    document.getElementById('loc-lon').value = lon.toFixed(6);
+    // Store which device(s) to send to
+    state.pendingAddDeviceKey = deviceKey;
     setTab('locations', document.querySelector('.tab:nth-child(2)'));
     showAddForm();
     document.getElementById('loc-name').focus();
@@ -473,6 +585,54 @@ const App = (() => {
 
   function renderLocations() {
     const el = document.getElementById('loc-list');
+    const devMacs = Object.keys(state.deviceLocations);
+
+    // Build device tab bar
+    const tabBar = document.getElementById('loc-device-tabs');
+    if (tabBar) {
+      const tabs = [{ key: '__app__', label: 'My Notes' }, ...devMacs.map(mac => ({
+        key: mac,
+        label: state.deviceLocations[mac].name || mac.slice(-4)
+      }))];
+      tabBar.innerHTML = tabs.map(t => {
+        const active = (state.selectedLocDevice || '__app__') === t.key;
+        return `<button onclick="App.selectLocDevice('${t.key}')" style="
+          padding:6px 14px;border-radius:20px;border:1px solid ${active ? 'var(--amber)' : 'var(--border)'};
+          background:${active ? 'var(--amber-dim)' : 'none'};color:${active ? 'var(--amber)' : 'var(--text2)'};
+          font-size:11px;cursor:pointer;white-space:nowrap;font-family:var(--font-ui);">
+          ${t.label}
+        </button>`;
+      }).join('');
+    }
+
+    const selected = state.selectedLocDevice;
+
+    // Show device locations
+    if (selected && selected !== '__app__' && state.deviceLocations[selected]) {
+      const devLocs = state.deviceLocations[selected].locations || [];
+      const devName = state.deviceLocations[selected].name;
+      if (devLocs.length === 0) {
+        el.innerHTML = `<div class="empty"><p>No locations on ${devName}</p></div>`;
+        return;
+      }
+      el.innerHTML = `<div class="section-label">${devName} — ${devLocs.length} locations</div>` +
+        devLocs.map((loc, i) => `
+          <div class="list-item">
+            <div class="list-icon amber">
+              <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+            </div>
+            <div class="item-info">
+              <div class="item-name">${loc.name}</div>
+              <div class="item-sub">${parseFloat(loc.lat).toFixed(5)}°, ${parseFloat(loc.lon).toFixed(5)}°</div>
+            </div>
+            <button onclick="App.showOnMap(${loc.lat},${loc.lon},'${loc.name}')"
+              style="background:none;border:1px solid var(--border);border-radius:6px;
+                     color:var(--text2);padding:5px 8px;cursor:pointer;font-size:11px;">Map</button>
+          </div>`).join('');
+      return;
+    }
+
+    // Show app-side saved locations
     if (state.locations.length === 0) {
       el.innerHTML = `<div class="empty">
         <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
@@ -493,6 +653,25 @@ const App = (() => {
           </div>
           <button onclick="App.deleteLocation(${i})" style="background:none;border:none;color:var(--red);padding:8px;cursor:pointer;font-size:18px;line-height:1">×</button>
         </div>`).join('');
+  }
+
+  function selectLocDevice(key) {
+    state.selectedLocDevice = key;
+    // If selecting a hardware device, request fresh locations
+    if (key !== '__app__' && state.mqttConnected) {
+      state.mqttClient.publish(`lodestone/loc/request/${key}`, '1');
+    }
+    renderLocations();
+  }
+
+  function showOnMap(lat, lon, name) {
+    setTab('map', document.querySelector('.tab'));
+    setTimeout(() => {
+      map.setView([parseFloat(lat), parseFloat(lon)], 16);
+      if (searchMarker) searchMarker.remove();
+      searchMarker = L.marker([parseFloat(lat), parseFloat(lon)], { icon: makeIcon('amber') })
+        .bindPopup(name).addTo(map).openPopup();
+    }, 100);
   }
 
   function renderDevices() {
@@ -942,6 +1121,7 @@ const App = (() => {
     sendPairRequest, unpairDevice,
     searchMap, selectSearchResult,
     renderMessages, sendMessage, setMsgRecipient, renderMsgRecipientBar,
+    selectLocDevice, showOnMap, showDeviceAddSelector, confirmAddToDevice,
   };
 
 })();

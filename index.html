@@ -367,6 +367,15 @@ nav{
         <span class="sh-title">Saved Locations</span>
         <button class="sh-action" onclick="App.showAddForm()">+ Add</button>
       </div>
+      <!-- Device tab bar — scrollable horizontal pills -->
+      <div id="loc-device-tabs" style="
+        display:flex;gap:6px;padding:8px 16px;overflow-x:auto;flex-shrink:0;
+        border-bottom:1px solid var(--border);-webkit-overflow-scrolling:touch;">
+        <button onclick="App.selectLocDevice('__app__')" style="
+          padding:6px 14px;border-radius:20px;border:1px solid var(--amber);
+          background:var(--amber-dim);color:var(--amber);font-size:11px;
+          cursor:pointer;white-space:nowrap;font-family:var(--font-ui);">My Notes</button>
+      </div>
       <div id="add-form" style="display:none">
         <div class="form-card">
           <div class="form-field">
