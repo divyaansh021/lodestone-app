@@ -193,10 +193,6 @@ const App = (() => {
         state.mqttClient.subscribe(`lodestone/pair/${myClean}_${cleanMac}`);
         state.mqttClient.subscribe(`lodestone/pair/${cleanMac}_${myClean}`);
       });
-      state.mqttClient.subscribe('lodestone/msg/broadcast');
-      state.mqttClient.subscribe('lodestone/loc/response/#');
-      const myCleanMacForMsg = state.myMac.replace(/:/g,'');
-      state.mqttClient.subscribe(`lodestone/msg/${myCleanMacForMsg}`);
       announcePresence();
       // Request locations from all paired hardware devices
       state.pairedDevices.forEach(mac => {
