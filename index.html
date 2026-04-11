@@ -177,7 +177,7 @@ nav{
 .form-field:last-of-type{border-bottom:none}
 .form-field label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text2)}
 .form-field input{
-  background:none;border:none;outline:none;font-size:14px;
+  background:none;border:none;outline:none;font-size:16px;
   color:var(--text);font-family:var(--font-mono);padding:2px 0;
   caret-color:var(--amber);
 }
@@ -224,7 +224,7 @@ nav{
 .toggle.on::after{transform:translateX(18px)}
 .conn-input{
   width:100%;background:none;border:none;outline:none;
-  font-size:13px;color:var(--text);font-family:var(--font-mono);
+  font-size:16px;color:var(--text);font-family:var(--font-mono);
   padding:4px 0;caret-color:var(--amber);
 }
 .conn-input::placeholder{color:var(--text3)}
@@ -321,6 +321,22 @@ nav{
 .map-search-result:last-child{border-bottom:none}
 .map-search-result:active{background:var(--bg2)}
 .map-search-result small{display:block;font-size:11px;color:var(--text2);margin-top:2px}
+/* ── Mobile polish (v10) ─────────────────────────────────── */
+.screen{overscroll-behavior:contain}
+input,textarea,select{font-size:16px !important}
+.sh-action{min-height:38px;display:inline-flex;align-items:center}
+.list-item button{min-height:40px}
+#msg-recipient-bar{scrollbar-width:none}
+#msg-recipient-bar::-webkit-scrollbar{display:none}
+#msg-recipient-bar button{min-height:36px;font-size:12px !important;padding:7px 14px !important}
+@media (max-width:380px){
+  .list-item{padding:12px 12px}
+  .sh{padding:12px 12px 8px}
+}
+@media (hover:none){
+  .list-item:active{background:var(--bg2)}
+  button:active{opacity:.75;transition:opacity .05s}
+}
 </style>
 </head>
 <body>
@@ -421,7 +437,7 @@ nav{
       <div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0">
         <input id="msg-input" type="text" placeholder="Type a message..." maxlength="50"
           style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;
-                 padding:9px 12px;font-size:14px;color:var(--text);outline:none;
+                 padding:11px 12px;font-size:16px;color:var(--text);outline:none;
                  caret-color:var(--amber);font-family:var(--font-ui)"
           onkeydown="if(event.key==='Enter')App.sendMessage()">
         <button onclick="App.sendMessage()" style="background:var(--amber);border:none;border-radius:8px;

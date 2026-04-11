@@ -292,6 +292,7 @@ const App = (() => {
     // Location response from hardware device
     if (topic.startsWith('lodestone/loc/response/')) {
       const devMac = topic.split('/')[3];
+      if (!isPaired(devMac)) return;  // drop unpaired
       const devEntry = Object.entries(state.devices).find(([mac]) => cleanMac(mac) === devMac || mac === devMac);
       const devName = devEntry ? devEntry[1].name : 'Lodestone';
       try {
@@ -580,7 +581,8 @@ const App = (() => {
     const devMacs = Object.keys(state.deviceLocations);
     const tabBar = document.getElementById('loc-device-tabs');
     if (tabBar) {
-      const tabs = [{key:'__app__', label:'My Notes'}, ...devMacs.map(mac => ({key:mac, label:state.deviceLocations[mac].name||mac.slice(-4)}))];
+      const pairedMacs = devMacs.filter(mac => isPaired(mac));
+      const tabs = [{key:'__app__', label:'My Notes'}, ...pairedMacs.map(mac => ({key:mac, label:state.deviceLocations[mac].name||mac.slice(-4)}))];
       tabBar.innerHTML = tabs.map(t => {
         const active = (state.selectedLocDevice||'__app__') === t.key;
         return `<button onclick="App.selectLocDevice('${t.key}')" style="padding:6px 14px;border-radius:20px;border:1px solid ${active?'var(--amber)':'var(--border)'};background:${active?'var(--amber-dim)':'none'};color:${active?'var(--amber)':'var(--text2)'};font-size:11px;cursor:pointer;white-space:nowrap;font-family:var(--font-ui);">${t.label}</button>`;
@@ -677,7 +679,6 @@ const App = (() => {
         const d = state.devices[mac] || state.devices[cleanMac(mac)] || {};
         return {mac, label: d.name || mac.slice(-4)};
       }),
-      ...Object.entries(state.devices).filter(([,d])=>!d.isHardware && isPaired(_=>false)).map(([mac,d])=>({mac,label:d.name||mac.slice(-4)})),
     ];
     const selClean = cleanMac(state.msgRecipient);
     bar.innerHTML = options.map(o => {
