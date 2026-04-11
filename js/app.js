@@ -211,7 +211,8 @@ const App = (() => {
     const topics = [
       'lodestone/announce',
       'lodestone/devices/#',
-      'lodestone/msg/broadcast',
+      // lodestone/msg/broadcast removed — messaging is now paired-only,
+      // each peer only listens on their personal lodestone/msg/<mac> topic.
       'lodestone/loc/response/#',
       `lodestone/msg/${myClean}`,
       `lodestone/request/${myClean}`,
@@ -275,8 +276,11 @@ const App = (() => {
   function handleMessage(topic, data) {
     const myClean = cleanMac(state.myMac);
 
-    // Incoming message
+    // Incoming message (paired-only: silently drop messages from unpaired senders)
     if (topic === 'lodestone/msg/broadcast' || topic === `lodestone/msg/${myClean}`) {
+      const senderClean = cleanMac(data.mac || '');
+      if (senderClean && !isPaired(senderClean)) return;  // drop unpaired
+      if (senderClean && state.unpairedSet.has(senderClean)) return;
       if (!state.messages) state.messages = [];
       state.messages.unshift({ from: data.from||'Unknown', msg: data.msg||'', time: Date.now() });
       if (state.messages.length > 50) state.messages.pop();
@@ -313,8 +317,9 @@ const App = (() => {
     // Announce
     if (topic === 'lodestone/announce') {
       if (data.mac === state.myMac || cleanMac(data.mac) === myClean) return;
-      // Ignore announces from devices we explicitly unpaired this session
-      if (state.unpairedSet.has(cleanMac(data.mac))) return;
+      // NOTE: we intentionally do NOT filter unpairedSet here — unpaired devices
+      // should still appear in the Nearby list so the user can re-pair them.
+      // They're just excluded from the map / location-sharing / messaging.
       const isHw = data.type === 'hardware';
       const mac = data.mac;
       state.devices[mac] = { ...(state.devices[mac]||{}), name:data.name||'Device', lastSeen:Date.now(), isHardware:isHw, lat:state.devices[mac]?.lat||null, lon:state.devices[mac]?.lon||null };
@@ -424,13 +429,19 @@ const App = (() => {
       if (deviceMarkers[key]) { deviceMarkers[key].remove(); delete deviceMarkers[key]; }
     });
 
-    // Remove from device list and location cache entirely
-    delete state.devices[mac];
-    delete state.devices[c];
+    // Clear saved GPS position for this device, but keep it in state.devices
+    // so it still appears in the Nearby list (user can re-pair).
+    [mac, c].forEach(key => {
+      if (state.devices[key]) {
+        state.devices[key].lat = null;
+        state.devices[key].lon = null;
+      }
+    });
     delete state.deviceLocations[mac];
     delete state.deviceLocations[c];
 
-    // Track as explicitly unpaired so announce doesn't re-add it
+    // Track as explicitly unpaired so pair-topic position updates are ignored
+    // until the user re-pairs. This does NOT hide the device from Nearby.
     state.unpairedSet.add(c);
     // Reset message recipient if it was this device
     if (cleanMac(state.msgRecipient) === c) state.msgRecipient = 'broadcast';
@@ -687,13 +698,25 @@ const App = (() => {
     const recipient = state.msgRecipient || 'broadcast';
     let toName = 'Everyone';
     if (recipient === 'broadcast') {
-      state.mqttClient.publish('lodestone/msg/broadcast', payload);
-      // Only send to currently paired devices (not ones just unpaired)
-      state.pairedDevices
-        .filter(mac => !state.unpairedSet.has(cleanMac(mac)))
-        .forEach(mac => state.mqttClient.publish(`lodestone/msg/${cleanMac(mac)}`, payload));
+      // Paired-only "broadcast": send to each currently-paired device's personal topic.
+      // We deliberately do NOT publish to lodestone/msg/broadcast any more, so
+      // unpaired devices never receive our messages.
+      const targets = state.pairedDevices
+        .map(m => cleanMac(m))
+        .filter(m => !state.unpairedSet.has(m));
+      if (targets.length === 0) {
+        toast('No paired devices to send to');
+        return;
+      }
+      targets.forEach(m => state.mqttClient.publish(`lodestone/msg/${m}`, payload));
+      toName = `${targets.length} paired`;
     } else {
       const c = cleanMac(recipient);
+      // Safety: refuse to send to an unpaired target
+      if (!state.pairedDevices.some(p => cleanMac(p) === c) || state.unpairedSet.has(c)) {
+        toast('Not paired with that device');
+        return;
+      }
       state.mqttClient.publish(`lodestone/msg/${c}`, payload);
       const d = state.devices[recipient] || state.devices[c] || {};
       toName = d.name || c.slice(-4);
